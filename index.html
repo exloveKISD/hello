@@ -1,147 +1,153 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Proxy Timeout Test</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8" />
+  <title>Proxy Timeout Test — External JS</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    html, body { height: 100%; margin: 0; font-family: system-ui, Arial, sans-serif; background: #0b1020; color: #e6e9f0; }
-    .wrap { min-height: 100%; display: grid; place-items: center; padding: 2rem; }
-    .card {
-      max-width: 700px; width: 100%; background: #141a33; border: 1px solid #253056; border-radius: 16px;
-      padding: 1.5rem; box-shadow: 0 10px 30px rgba(0,0,0,.35);
-    }
-    h1 { margin: 0 0 .5rem; font-size: 1.4rem; }
-    .muted { color: #9fb0d1; }
-    .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
-    .badge { padding: .3rem .6rem; border-radius: 999px; background: #1f2747; border: 1px solid #2e3b6b; font-variant-numeric: tabular-nums; }
-    button {
-      background: #2a3770; color: #fff; border: 1px solid #3a4aa0; border-radius: 10px; padding: .6rem .9rem; cursor: pointer;
-    }
-    button:hover { filter: brightness(1.15); }
-    code { background: #1a2244; padding: .15rem .35rem; border-radius: 6px; border: 1px solid #2a3a7a; }
-    hr { border: 0; border-top: 1px solid #253056; margin: 1rem 0; }
-    .foot { font-size: .9rem; color: #9fb0d1; }
+    :root { color-scheme: light dark; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: #0b1020; color: #e6e9f0; }
+    .wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .card { width: 100%; max-width: 760px; background: #141a33; border: 1px solid #253056; border-radius: 16px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    h1 { margin: 0 0 .5rem; font-size: 1.25rem; }
+    p.muted { color: #9fb0d1; margin-top: .25rem; }
+    .row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+    .badge { background: #1f2747; border: 1px solid #2e3b6b; padding: .35rem .6rem; border-radius: 999px; font-variant-numeric: tabular-nums; }
+    button { background: #2a3770; color: #fff; border: 1px solid #3a4aa0; border-radius: 10px; padding: .55rem .8rem; cursor: pointer; }
+    button:hover { filter: brightness(1.12); }
+    code { background: #1a2244; border: 1px solid #2a3a7a; padding: .15rem .35rem; border-radius: 6px; }
     .ok { color: #65e39a; }
     .warn { color: #ffda6b; }
     .err { color: #ff7b7b; }
-    .hidden { display: none; }
+    hr { border: 0; border-top: 1px solid #253056; margin: 1rem 0; }
   </style>
+
+  <!-- Define handlers before we add the external <script> so <script onload/onerror> can call them -->
+  <script>
+    // UI helpers
+    function setStatus(text, cls) {
+      const el = document.getElementById('status');
+      el.textContent = text;
+      el.className = cls;
+    }
+
+    let startTime, raf;
+    function startTimer() {
+      startTime = performance.now();
+      function tick(now) {
+        const s = (now - startTime) / 1000;
+        document.getElementById('elapsed').textContent = s.toFixed(1) + 's';
+        raf = requestAnimationFrame(tick);
+      }
+      raf = requestAnimationFrame(tick);
+    }
+    function stopTimer() { if (raf) cancelAnimationFrame(raf); }
+
+    // Called by <script id="probe"> events
+    function probeDone(kind) {
+      stopTimer();
+      if (kind === 'load') {
+        setStatus('Completed: external JS finished downloading (load).', 'ok');
+      } else if (kind === 'error') {
+        // Network abort, proxy timeout, invalid content-type, etc.
+        setStatus('Completed: external JS ended with error (likely timeout/abort).', 'err');
+      }
+    }
+
+    // Build a delayed URL
+    function delayedUrl(ms) {
+      const seconds = Math.ceil(ms / 1000); // httpbin uses seconds
+      return `https://httpbin.org/delay/${seconds}`;
+      // If httpbin is blocked, use httpstat.us (ms):
+      // return `https://httpstat.us/200?sleep=${ms}`;
+    }
+
+    // Kick off a test by inserting a <script src=... defer>
+    function runTest(ms) {
+      // Reset UI
+      document.getElementById('currentDelay').textContent = ms.toLocaleString() + ' ms';
+      setStatus('Loading external JS… (waiting for network)', 'warn');
+      document.getElementById('resultNotes').textContent =
+        'This page will not fully load until the external script finishes or errors.';
+      document.getElementById('probeHost').textContent = delayedUrl(ms);
+
+      // Remove any previous probe
+      const old = document.getElementById('probe');
+      if (old) old.remove();
+
+      // Create a new script tag that the browser treats as a dependency.
+      // Using defer: it won’t block initial HTML rendering (so you can see the timer),
+      // but the page’s window.onload waits for it to finish.
+      const s = document.createElement('script');
+      s.id = 'probe';
+      s.defer = true;
+      s.src = delayedUrl(ms) + `?cb=${Date.now()}`; // cache-bust
+      s.onload = () => probeDone('load');
+      s.onerror = () => probeDone('error');
+
+      // Start the timer and install a manual watchdog (e.g., 25s) so you can see a "no-finish" case.
+      startTimer();
+      const watchdog = 25000; // change if you want
+      clearTimeout(runTest._wdt);
+      runTest._wdt = setTimeout(() => {
+        // If we’re still waiting after watchdog ms, mark it (does not cancel the request).
+        setStatus(`Still waiting after ${watchdog/1000}s… (proxy may have timed out at 15s)`, 'warn');
+      }, watchdog);
+
+      // Append to <head> so it’s considered a page subresource
+      document.head.appendChild(s);
+    }
+
+    // Auto-run default on DOM ready
+    document.addEventListener('DOMContentLoaded', () => runTest(30000)); // 30s default
+    // If the proxy never kills it and the server finally responds, window 'load' fires after the script event.
+    window.addEventListener('load', () => {
+      document.getElementById('onloadFired').textContent = 'window.onload fired (page considered fully loaded).';
+    });
+  </script>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <h1>Proxy Timeout Test</h1>
+      <h1>Proxy Timeout Test — External JavaScript</h1>
       <p class="muted">
-        This page loads a sub-resource that deliberately delays its response. Many proxies time out pages that
-        haven’t fully loaded within their threshold (e.g., <strong>15 seconds</strong>). Use the controls below to choose a delay and watch the timer.
+        This page tries to fetch an external <code>&lt;script src&gt;</code> that responds after a delay.
+        Many proxies terminate pages that haven’t fully loaded within their threshold (e.g., <strong>15&nbsp;s</strong>).
+        Use the buttons to set the delay and watch what happens.
       </p>
 
       <div class="row">
         <span>Delay target:</span>
-        <button data-delay="20000">20s</button>
-        <button data-delay="30000">30s</button>
-        <button data-delay="60000">60s</button>
-        <span class="badge">Current: <span id="currentDelay">30,000</span> ms</span>
+        <button onclick="runTest(20000)">20s</button>
+        <button onclick="runTest(30000)">30s</button>
+        <button onclick="runTest(60000)">60s</button>
+        <span class="badge">Current: <span id="currentDelay">30,000 ms</span></span>
       </div>
 
       <hr />
 
       <div class="row">
         <div>Elapsed: <span class="badge" id="elapsed">0.0s</span></div>
-        <div>Status:
-          <span id="status" class="warn">Loading (waiting for delayed resource)…</span>
-        </div>
+        <div>Status: <span id="status" class="warn">Waiting…</span></div>
       </div>
 
-      <p class="foot">
-        Notes: The page won’t fire <code>window.onload</code> until the delayed image finishes
-        (or your proxy times out). If your network blocks <code>httpbin.org</code>, edit the source to use
-        <code>https://httpstat.us/200?sleep=30000</code> (set <code>sleep</code> in ms), or point to an internal endpoint that can delay.
+      <p class="muted" id="resultNotes"></p>
+      <p class="muted">Probe URL: <code id="probeHost"></code></p>
+      <p class="ok" id="onloadFired"></p>
+
+      <hr />
+      <p class="muted">
+        If your network blocks <code>httpbin.org</code>, edit <code>delayedUrl(ms)</code> to use
+        <code>https://httpstat.us/200?sleep=&lt;ms&gt;</code>. Either way, the browser waits for the script
+        response to complete (or fail). Because the response isn’t real JavaScript, it won’t execute, but
+        the network fetch still exercises your proxy’s timeout behavior.
       </p>
 
-      <!-- The delayed resource (hidden 1×1 image). Its URL is set by JS based on the selected delay. -->
-      <img id="delayedImage" class="hidden" width="1" height="1" alt="delayed" />
+      <p class="muted">
+        Want an alternate signal? Add an <code>&lt;iframe src&gt;</code> pointing to the same delayed URL—parent
+        <code>window.onload</code> waits for iframes too.
+      </p>
     </div>
   </div>
-
-  <script>
-    // ------- Configuration helpers -------
-    // Pick a default delay (ms). Start at 30s so it clearly exceeds a 15s proxy timeout.
-    let delayMs = 30000;
-
-    const delayedImg = document.getElementById('delayedImage');
-    const currentDelay = document.getElementById('currentDelay');
-    const statusEl = document.getElementById('status');
-    const elapsedEl = document.getElementById('elapsed');
-
-    // Build a delayed URL. Using httpbin: /delay/N returns after N seconds.
-    // We request it as an <img>; the content-type won't be image, but the browser will
-    // still wait for the HTTP response to finish or fail, which is what we want.
-    function delayedUrl(ms) {
-      const seconds = Math.ceil(ms / 1000); // httpbin accepts whole seconds
-      return `https://httpbin.org/delay/${seconds}`;
-      // Alternative if blocked:
-      // return `https://httpstat.us/200?sleep=${ms}`; // sleep in milliseconds
-    }
-
-    // ------- Timer & state -------
-    let startTime = null;
-    let timerHandle = null;
-    function startTimer() {
-      startTime = performance.now();
-      if (timerHandle) cancelAnimationFrame(timerHandle);
-      function tick(now) {
-        const s = (now - startTime) / 1000;
-        elapsedEl.textContent = s.toFixed(1) + 's';
-        timerHandle = requestAnimationFrame(tick);
-      }
-      timerHandle = requestAnimationFrame(tick);
-    }
-    function stopTimerAndMark(text, cls) {
-      if (timerHandle) cancelAnimationFrame(timerHandle);
-      statusEl.textContent = text;
-      statusEl.className = cls;
-    }
-
-    // ------- Wiring -------
-    function kickOffRequest() {
-      currentDelay.textContent = delayMs.toLocaleString();
-      statusEl.textContent = 'Loading (waiting for delayed resource)…';
-      statusEl.className = 'warn';
-      // Set the delayed URL and start counting
-      delayedImg.src = delayedUrl(delayMs) + `?cacheBust=${Date.now()}`;
-      startTimer();
-    }
-
-    // Buttons to switch delay
-    document.querySelectorAll('button[data-delay]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        delayMs = parseInt(btn.getAttribute('data-delay'), 10);
-        kickOffRequest();
-      });
-    });
-
-    // When the delayed image finally loads or errors, update status.
-    delayedImg.addEventListener('load', () => {
-      stopTimerAndMark('Completed: delayed resource returned (load event).', 'ok');
-    });
-    delayedImg.addEventListener('error', () => {
-      // With httpbin, this will typically be 'error' because content-type != image,
-      // but it still only fires after the delayed response arrives (or your proxy aborts it).
-      stopTimerAndMark('Completed: delayed resource ended (error event after delay).', 'ok');
-    });
-
-    // Also listen for window onload to confirm page-level load completion.
-    window.addEventListener('load', () => {
-      // If we get here, the proxy did NOT time out before the delayed resource finished.
-      // We’ll mark success only if the delayed resource already fired load/error.
-      // (If the proxy kills the request, window.onload may never fire.)
-      // No-op here; the image listeners above already mark completion.
-    });
-
-    // Start immediately with default delay.
-    kickOffRequest();
-  </script>
 </body>
 </html>
