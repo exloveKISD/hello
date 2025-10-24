@@ -22,9 +22,7 @@
     hr { border: 0; border-top: 1px solid #253056; margin: 1rem 0; }
   </style>
 
-  <!-- Define handlers before we add the external <script> so <script onload/onerror> can call them -->
   <script>
-    // UI helpers
     function setStatus(text, cls) {
       const el = document.getElementById('status');
       el.textContent = text;
@@ -43,66 +41,52 @@
     }
     function stopTimer() { if (raf) cancelAnimationFrame(raf); }
 
-    // Called by <script id="probe"> events
     function probeDone(kind) {
       stopTimer();
       if (kind === 'load') {
         setStatus('Completed: external JS finished downloading (load).', 'ok');
       } else if (kind === 'error') {
-        // Network abort, proxy timeout, invalid content-type, etc.
         setStatus('Completed: external JS ended with error (likely timeout/abort).', 'err');
       }
     }
 
-    // Build a delayed URL
     function delayedUrl(ms) {
-      const seconds = Math.ceil(ms / 1000); // httpbin uses seconds
+      const seconds = Math.ceil(ms / 1000);
       return `https://httpbin.org/delay/${seconds}`;
-      // If httpbin is blocked, use httpstat.us (ms):
+      // Alternate if blocked:
       // return `https://httpstat.us/200?sleep=${ms}`;
     }
 
-    // Kick off a test by inserting a <script src=... defer>
     function runTest(ms) {
-      // Reset UI
       document.getElementById('currentDelay').textContent = ms.toLocaleString() + ' ms';
       setStatus('Loading external JS… (waiting for network)', 'warn');
       document.getElementById('resultNotes').textContent =
-        'This page will not fully load until the external script finishes or errors.';
+        'The page will not fully load until the external script finishes or errors.';
       document.getElementById('probeHost').textContent = delayedUrl(ms);
 
-      // Remove any previous probe
       const old = document.getElementById('probe');
       if (old) old.remove();
 
-      // Create a new script tag that the browser treats as a dependency.
-      // Using defer: it won’t block initial HTML rendering (so you can see the timer),
-      // but the page’s window.onload waits for it to finish.
       const s = document.createElement('script');
       s.id = 'probe';
       s.defer = true;
-      s.src = delayedUrl(ms) + `?cb=${Date.now()}`; // cache-bust
+      s.src = delayedUrl(ms) + `?cb=${Date.now()}`;
       s.onload = () => probeDone('load');
       s.onerror = () => probeDone('error');
 
-      // Start the timer and install a manual watchdog (e.g., 25s) so you can see a "no-finish" case.
       startTimer();
-      const watchdog = 25000; // change if you want
+      const watchdog = 25000;
       clearTimeout(runTest._wdt);
       runTest._wdt = setTimeout(() => {
-        // If we’re still waiting after watchdog ms, mark it (does not cancel the request).
         setStatus(`Still waiting after ${watchdog/1000}s… (proxy may have timed out at 15s)`, 'warn');
       }, watchdog);
 
-      // Append to <head> so it’s considered a page subresource
       document.head.appendChild(s);
     }
 
-    // Auto-run default on DOM ready
-    document.addEventListener('DOMContentLoaded', () => runTest(30000)); // 30s default
-    // If the proxy never kills it and the server finally responds, window 'load' fires after the script event.
+    document.addEventListener('DOMContentLoaded', () => runTest(30000));
     window.addEventListener('load', () => {
-      document.getElementById('onloadFired').textContent = 'window.onload fired (page considered fully loaded).';
+      document.getElementById('onloadFired').textContent = 'window.onload fired (page fully loaded).';
     });
   </script>
 </head>
@@ -111,13 +95,13 @@
     <div class="card">
       <h1>Proxy Timeout Test — External JavaScript</h1>
       <p class="muted">
-        This page tries to fetch an external <code>&lt;script src&gt;</code> that responds after a delay.
-        Many proxies terminate pages that haven’t fully loaded within their threshold (e.g., <strong>15&nbsp;s</strong>).
-        Use the buttons to set the delay and watch what happens.
+        This page fetches an external <code>&lt;script&gt;</code> that deliberately delays its response.
+        Many proxies kill pages that haven’t finished loading within their threshold (e.g., 15 s).
       </p>
 
       <div class="row">
         <span>Delay target:</span>
+        <button onclick="runTest(10000)">10s</button>
         <button onclick="runTest(20000)">20s</button>
         <button onclick="runTest(30000)">30s</button>
         <button onclick="runTest(60000)">60s</button>
@@ -138,14 +122,8 @@
       <hr />
       <p class="muted">
         If your network blocks <code>httpbin.org</code>, edit <code>delayedUrl(ms)</code> to use
-        <code>https://httpstat.us/200?sleep=&lt;ms&gt;</code>. Either way, the browser waits for the script
-        response to complete (or fail). Because the response isn’t real JavaScript, it won’t execute, but
-        the network fetch still exercises your proxy’s timeout behavior.
-      </p>
-
-      <p class="muted">
-        Want an alternate signal? Add an <code>&lt;iframe src&gt;</code> pointing to the same delayed URL—parent
-        <code>window.onload</code> waits for iframes too.
+        <code>https://httpstat.us/200?sleep=&lt;ms&gt;</code>.  
+        The browser waits for the script fetch to complete (or fail), which exposes how your proxy handles delayed loads.
       </p>
     </div>
   </div>
